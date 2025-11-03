@@ -5,19 +5,29 @@ from rest_framework_simplejwt.tokens import RefreshToken
 from django.contrib.auth.models import User
 
 from .models import Recipe, Category
-from .serializers import RegisterSerializer, RecipeSerializer, CategorySerializer
+from .serializers import (
+    RegisterSerializer,
+    RecipeSerializer,
+    CategorySerializer,
+)
 
-# Auth
+# ------------------------
+# Auth Views
+# ------------------------
+
 class RegisterView(generics.CreateAPIView):
     queryset = User.objects.all()
     serializer_class = RegisterSerializer
     permission_classes = [permissions.AllowAny]
 
+
 class LoginView(TokenObtainPairView):
     permission_classes = [permissions.AllowAny]
 
+
 class TokenRefresh(TokenRefreshView):
     permission_classes = [permissions.AllowAny]
+
 
 class LogoutView(generics.GenericAPIView):
     permission_classes = [permissions.IsAuthenticated]
@@ -32,7 +42,11 @@ class LogoutView(generics.GenericAPIView):
                 pass
         return Response({"detail": "Logged out"}, status=status.HTTP_200_OK)
 
+
+# ------------------------
 # Recipes & Categories
+# ------------------------
+
 class RecipeViewSet(viewsets.ModelViewSet):
     queryset = Recipe.objects.all().order_by("-created_at")
     serializer_class = RecipeSerializer
@@ -40,6 +54,7 @@ class RecipeViewSet(viewsets.ModelViewSet):
 
     def perform_create(self, serializer):
         serializer.save(author=self.request.user)
+
 
 class CategoryViewSet(viewsets.ModelViewSet):
     queryset = Category.objects.all()
