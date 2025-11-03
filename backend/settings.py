@@ -5,13 +5,14 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 
 SECRET_KEY = os.environ.get('SECRET_KEY', "dev-secret-key-change-in-production")
 
-# FIX: This should be True for development
-DEBUG = True  # Change this line!
+
+DEBUG = True
 
 ALLOWED_HOSTS = [
     "ruotg123.pythonanywhere.com",
     "localhost",
     "127.0.0.1",
+    ".pythonanywhere.com",
 ]
 
 INSTALLED_APPS = [
@@ -76,6 +77,9 @@ USE_TZ = True
 
 STATIC_URL = "/static/"
 STATIC_ROOT = os.path.join(BASE_DIR, "static")
+
+MEDIA_URL = 'media/'
+MEDIA_ROOT = os.path.join(BASE_DIR, 'media')
 
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
