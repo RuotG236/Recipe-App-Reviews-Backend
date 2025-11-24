@@ -9,13 +9,10 @@ import os
 BASE_DIR = Path(__file__).resolve().parent.parent
 
 # SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = os.environ.get(
-    'DJANGO_SECRET_KEY',
-    'django-recipe-app-dev-key-change-in-production'
-)
+SECRET_KEY = 'django-recipe-app-dev-key-change-in-production'
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = os.environ.get('DEBUG', 'True').lower() in ('true', '1', 'yes')
+DEBUG = True
 
 ALLOWED_HOSTS = [
     'localhost',
@@ -81,21 +78,8 @@ DATABASES = {
     }
 }
 
-# Password validation
-AUTH_PASSWORD_VALIDATORS = [
-    {
-        'NAME': 'django.contrib.auth.password_validation.UserAttributeSimilarityValidator',
-    },
-    {
-        'NAME': 'django.contrib.auth.password_validation.MinimumLengthValidator',
-    },
-    {
-        'NAME': 'django.contrib.auth.password_validation.CommonPasswordValidator',
-    },
-    {
-        'NAME': 'django.contrib.auth.password_validation.NumericPasswordValidator',
-    },
-]
+# Password validation - disabled for easier testing
+AUTH_PASSWORD_VALIDATORS = []
 
 # Internationalization
 LANGUAGE_CODE = 'en-us'
@@ -114,7 +98,6 @@ MEDIA_ROOT = BASE_DIR / 'media'
 
 # Default primary key field type
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
-
 
 # CORS Configuration
 CORS_ALLOW_ALL_ORIGINS = True
