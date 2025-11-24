@@ -115,18 +115,9 @@ MEDIA_ROOT = BASE_DIR / 'media'
 # Default primary key field type
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
-# CORS Configuration
-if DEBUG:
-    CORS_ALLOW_ALL_ORIGINS = True
-else:
-    CORS_ALLOWED_ORIGINS = [
-        'https://your-frontend-domain.netlify.app',
-        'https://your-frontend-domain.vercel.app',
-        'http://localhost:8080',
-        'http://localhost:5173',
-        'http://127.0.0.1:8080',
-    ]
 
+# CORS Configuration
+CORS_ALLOW_ALL_ORIGINS = True
 CORS_ALLOW_CREDENTIALS = True
 
 # REST Framework Configuration
