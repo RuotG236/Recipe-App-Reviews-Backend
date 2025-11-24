@@ -1,6 +1,6 @@
 from rest_framework import serializers
 from django.contrib.auth.models import User
-from .models import Recipe, Category
+from .models import Recipe, Category, Favorite, Rating, Comment, Ingredient
 
 
 # ------------------------
@@ -32,6 +32,15 @@ class RegisterSerializer(serializers.ModelSerializer):
 
 
 # ------------------------
+# User Profile
+# ------------------------
+class UserSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = User
+        fields = ["id", "username", "email"]
+
+
+# ------------------------
 # Category
 # ------------------------
 class CategorySerializer(serializers.ModelSerializer):
@@ -41,21 +50,65 @@ class CategorySerializer(serializers.ModelSerializer):
 
 
 # ------------------------
-# Recipe
+# Recipe List & Detail
 # ------------------------
-class RecipeSerializer(serializers.ModelSerializer):
+class RecipeListSerializer(serializers.ModelSerializer):
     author = serializers.ReadOnlyField(source="author.username")
     category_name = serializers.ReadOnlyField(source="category.name")
 
     class Meta:
         model = Recipe
+        fields = ["id", "title", "author", "category_name", "created_at"]
+
+
+class RecipeDetailSerializer(serializers.ModelSerializer):
+    author = serializers.ReadOnlyField(source="author.username")
+    category_name = serializers.ReadOnlyField(source="category.name")
+    ingredients = serializers.StringRelatedField(many=True, read_only=True)
+    ratings = serializers.StringRelatedField(many=True, read_only=True)
+    comments = serializers.StringRelatedField(many=True, read_only=True)
+
+    class Meta:
+        model = Recipe
         fields = [
-            "id",
-            "title",
-            "description",
-            "created_at",
-            "author",
-            "category",
-            "category_name",
+            "id", "title", "description", "created_at",
+            "author", "category", "category_name",
+            "ingredients", "ratings", "comments"
         ]
         read_only_fields = ["created_at", "author"]
+
+
+# ------------------------
+# Favorite
+# ------------------------
+class FavoriteSerializer(serializers.ModelSerializer):
+    recipe_title = serializers.ReadOnlyField(source="recipe.title")
+
+    class Meta:
+        model = Favorite
+        fields = ["id", "recipe", "recipe_title"]
+
+
+# ------------------------
+# Rating
+# ------------------------
+class RatingSerializer(serializers.ModelSerializer):
+    recipe_title = serializers.ReadOnlyField(source="recipe.title")
+    user = serializers.ReadOnlyField(source="user.username")
+
+    class Meta:
+        model = Rating
+        fields = ["id", "recipe", "recipe_title", "user", "rating"]
+
+
+# ------------------------
+# Comment
+# ------------------------
+class CommentSerializer(serializers.ModelSerializer):
+    recipe_title = serializers.ReadOnlyField(source="recipe.title")
+    user = serializers.ReadOnlyField(source="user.username")
+
+    class Meta:
+        model = Comment
+        fields = ["id", "recipe", "recipe_title", "user", "text", "created_at"]
+        read_only_fields = ["created_at", "user"]
