@@ -1,226 +1,218 @@
-from rest_framework import generics, viewsets, permissions, status
-from rest_framework.decorators import action
-from rest_framework.response import Response
-from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
-from rest_framework_simplejwt.tokens import RefreshToken
+
+from django.db import models
 from django.contrib.auth.models import User
-from django.db.models import Q
-
-from .models import Recipe, Category, Favorite, Rating, Comment, Ingredient
-from .serializers import (
-    RegisterSerializer, UserSerializer, RecipeListSerializer,
-    RecipeDetailSerializer, CategorySerializer, FavoriteSerializer,
-    RatingSerializer, CommentSerializer
-)
-from .permissions import IsOwnerOrReadOnly, IsAdminOrReadOnly
+from django.core.validators import MinValueValidator, MaxValueValidator
 
 
-# Authentication Views
-class RegisterView(generics.CreateAPIView):
-    queryset = User.objects.all()
-    serializer_class = RegisterSerializer
-    permission_classes = [permissions.AllowAny]
+class Category(models.Model):
 
-    def create(self, request, *args, **kwargs):
-        serializer = self.get_serializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
-        user = serializer.save()
+    name = models.CharField(max_length=100, unique=True)
+    description = models.TextField(blank=True, null=True)
+    created_at = models.DateTimeField(auto_now_add=True)
 
-        # Generate tokens for the new user
-        refresh = RefreshToken.for_user(user)
+    class Meta:
+        verbose_name_plural = 'Categories'
+        ordering = ['name']
 
-        return Response({
-            'user': UserSerializer(user).data,
-            'refresh': str(refresh),
-            'access': str(refresh.access_token),
-        }, status=status.HTTP_201_CREATED)
+    def __str__(self):
+        return self.name
 
 
-class LoginView(TokenObtainPairView):
-    permission_classes = [permissions.AllowAny]
+class Recipe(models.Model):
+    """
+    Main recipe model containing all recipe information.
+    """
+    title = models.CharField(max_length=255)
+    description = models.TextField(help_text="Brief description of the recipe")
+    instructions = models.TextField(help_text="Step-by-step cooking instructions")
+    prep_time = models.PositiveIntegerField(
+        help_text="Preparation time in minutes",
+        default=0
+    )
+    cook_time = models.PositiveIntegerField(
+        help_text="Cooking time in minutes",
+        default=0
+    )
+    servings = models.PositiveIntegerField(default=1)
+    image = models.ImageField(
+        upload_to='recipes/',
+        blank=True,
+        null=True,
+        help_text="Recipe image"
+    )
 
-    def post(self, request, *args, **kwargs):
-        response = super().post(request, *args, **kwargs)
-        if response.status_code == 200:
-            user = User.objects.get(username=request.data['username'])
-            response.data['user'] = UserSerializer(user).data
-        return response
+    # Relationships
+    author = models.ForeignKey(
+        User,
+        on_delete=models.CASCADE,
+        related_name='recipes'
+    )
+    category = models.ForeignKey(
+        Category,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='recipes'
+    )
 
+    # Timestamps
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
 
-class TokenRefreshViewCustom(TokenRefreshView):
-    permission_classes = [permissions.AllowAny]
+    # Status
+    is_published = models.BooleanField(default=True)
 
+    class Meta:
+        ordering = ['-created_at']
 
-class LogoutView(generics.GenericAPIView):
-    permission_classes = [permissions.IsAuthenticated]
+    def __str__(self):
+        return self.title
 
-    def post(self, request):
-        try:
-            refresh_token = request.data.get("refresh")
-            if refresh_token:
-                token = RefreshToken(refresh_token)
-                token.blacklist()
-            return Response({"detail": "Successfully logged out"}, status=status.HTTP_200_OK)
-        except Exception:
-            return Response({"detail": "Invalid token"}, status=status.HTTP_400_BAD_REQUEST)
+    def average_rating(self):
+        """Calculate and return the average rating for this recipe."""
+        ratings = self.ratings.all()
+        if ratings.exists():
+            return sum(r.rating for r in ratings) / ratings.count()
+        return 0.0
 
+    def total_ratings(self):
+        """Return the total number of ratings."""
+        return self.ratings.count()
 
-class ProfileView(generics.RetrieveUpdateAPIView):
-    serializer_class = UserSerializer
-    permission_classes = [permissions.IsAuthenticated]
+    def total_time(self):
+        """Return total cooking time (prep + cook)."""
+        return self.prep_time + self.cook_time
 
-    def get_object(self):
-        return self.request.user
-
-
-# Recipe Views
-class RecipeViewSet(viewsets.ModelViewSet):
-    permission_classes = [permissions.IsAuthenticatedOrReadOnly, IsOwnerOrReadOnly]
-
-    def get_queryset(self):
-        queryset = Recipe.objects.all()
-
-        # Search functionality
-        search = self.request.query_params.get('search', None)
-        if search:
-            queryset = queryset.filter(
-                Q(title__icontains=search) |
-                Q(description__icontains=search) |
-                Q(ingredients__icontains=search)
-            )
-
-        # Category filter
-        category = self.request.query_params.get('category', None)
-        if category:
-            queryset = queryset.filter(category__id=category)
-
-        # Author filter
-        author = self.request.query_params.get('author', None)
-        if author:
-            queryset = queryset.filter(author__username=author)
-
-        return queryset.order_by('-created_at')
-
-    def get_serializer_class(self):
-        if self.action == 'list':
-            return RecipeListSerializer
-        return RecipeDetailSerializer
-
-    def get_serializer_context(self):
-        return {'request': self.request}
-
-    def perform_create(self, serializer):
-        serializer.save(author=self.request.user)
-
-    @action(detail=True, methods=['post'], permission_classes=[permissions.IsAuthenticated])
-    def favorite(self, request, pk=None):
-        recipe = self.get_object()
-        favorite, created = Favorite.objects.get_or_create(
-            user=request.user,
-            recipe=recipe
-        )
-        if created:
-            return Response({'detail': 'Recipe added to favorites'}, status=status.HTTP_201_CREATED)
-        return Response({'detail': 'Recipe already in favorites'}, status=status.HTTP_200_OK)
-
-    @action(detail=True, methods=['delete'], permission_classes=[permissions.IsAuthenticated])
-    def unfavorite(self, request, pk=None):
-        recipe = self.get_object()
-        favorite = Favorite.objects.filter(user=request.user, recipe=recipe).first()
-        if favorite:
-            favorite.delete()
-            return Response({'detail': 'Recipe removed from favorites'}, status=status.HTTP_204_NO_CONTENT)
-        return Response({'detail': 'Recipe not in favorites'}, status=status.HTTP_404_NOT_FOUND)
-
-    @action(detail=True, methods=['post'], permission_classes=[permissions.IsAuthenticated])
-    def rate(self, request, pk=None):
-        recipe = self.get_object()
-        rating_value = request.data.get('rating')
-
-        if not rating_value or not (1 <= int(rating_value) <= 5):
-            return Response({'detail': 'Rating must be between 1 and 5'}, status=status.HTTP_400_BAD_REQUEST)
-
-        rating, created = Rating.objects.update_or_create(
-            user=request.user,
-            recipe=recipe,
-            defaults={'rating': rating_value}
-        )
-
-        return Response(RatingSerializer(rating).data,
-                        status=status.HTTP_201_CREATED if created else status.HTTP_200_OK)
-
-    @action(detail=True, methods=['post'], permission_classes=[permissions.IsAuthenticated])
-    def comment(self, request, pk=None):
-        recipe = self.get_object()
-        text = request.data.get('text')
-
-        if not text:
-            return Response({'detail': 'Comment text is required'}, status=status.HTTP_400_BAD_REQUEST)
-
-        comment = Comment.objects.create(
-            user=request.user,
-            recipe=recipe,
-            text=text
-        )
-
-        return Response(CommentSerializer(comment).data, status=status.HTTP_201_CREATED)
-
-    @action(detail=False, methods=['get'], permission_classes=[permissions.IsAuthenticated])
-    def my_recipes(self, request):
-        recipes = Recipe.objects.filter(author=request.user)
-        serializer = RecipeListSerializer(recipes, many=True, context={'request': request})
-        return Response(serializer.data)
+    @property
+    def is_favorited_by(self):
+        """Helper property for serializer context."""
+        return None  # Handled in serializer with request context
 
 
-# Category Views
-class CategoryViewSet(viewsets.ModelViewSet):
-    queryset = Category.objects.all()
-    serializer_class = CategorySerializer
-    permission_classes = [IsAdminOrReadOnly]
+class Ingredient(models.Model):
+    """
+    Ingredient model linked to recipes.
+    """
+    UNIT_CHOICES = [
+        ('g', 'Grams'),
+        ('kg', 'Kilograms'),
+        ('ml', 'Milliliters'),
+        ('l', 'Liters'),
+        ('tsp', 'Teaspoon'),
+        ('tbsp', 'Tablespoon'),
+        ('cup', 'Cup'),
+        ('oz', 'Ounce'),
+        ('lb', 'Pound'),
+        ('piece', 'Piece'),
+        ('pinch', 'Pinch'),
+        ('to taste', 'To Taste'),
+    ]
+
+    recipe = models.ForeignKey(
+        Recipe,
+        on_delete=models.CASCADE,
+        related_name='ingredient_items'
+    )
+    name = models.CharField(max_length=200)
+    quantity = models.DecimalField(
+        max_digits=10,
+        decimal_places=2,
+        null=True,
+        blank=True
+    )
+    unit = models.CharField(
+        max_length=20,
+        choices=UNIT_CHOICES,
+        blank=True,
+        default=''
+    )
+    notes = models.CharField(max_length=200, blank=True, default='')
+
+    class Meta:
+        ordering = ['id']
+
+    def __str__(self):
+        if self.quantity and self.unit:
+            return f"{self.quantity} {self.unit} {self.name}"
+        elif self.quantity:
+            return f"{self.quantity} {self.name}"
+        return self.name
 
 
-# Favorite Views
-class FavoriteListView(generics.ListAPIView):
-    serializer_class = FavoriteSerializer
-    permission_classes = [permissions.IsAuthenticated]
+class Favorite(models.Model):
+    """
+    User's favorite recipes.
+    """
+    user = models.ForeignKey(
+        User,
+        on_delete=models.CASCADE,
+        related_name='favorites'
+    )
+    recipe = models.ForeignKey(
+        Recipe,
+        on_delete=models.CASCADE,
+        related_name='favorited_by'
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
 
-    def get_queryset(self):
-        return Favorite.objects.filter(user=self.request.user)
+    class Meta:
+        unique_together = ('user', 'recipe')
+        ordering = ['-created_at']
 
-
-# Comment Views
-class CommentUpdateDeleteView(generics.RetrieveUpdateDestroyAPIView):
-    queryset = Comment.objects.all()
-    serializer_class = CommentSerializer
-    permission_classes = [IsOwnerOrReadOnly]
-
-
-# Admin Views
-class UserListView(generics.ListAPIView):
-    queryset = User.objects.all()
-    serializer_class = UserSerializer
-    permission_classes = [permissions.IsAdminUser]
-
-
-class UserDetailView(generics.RetrieveUpdateAPIView):
-    queryset = User.objects.all()
-    serializer_class = UserSerializer
-    permission_classes = [permissions.IsAdminUser]
+    def __str__(self):
+        return f"{self.user.username} - {self.recipe.title}"
 
 
-class AdminRecipeListView(generics.ListAPIView):
-    queryset = Recipe.objects.all()
-    serializer_class = RecipeDetailSerializer
-    permission_classes = [permissions.IsAdminUser]
+class Rating(models.Model):
+    """
+    User ratings for recipes (1-5 stars).
+    """
+    user = models.ForeignKey(
+        User,
+        on_delete=models.CASCADE,
+        related_name='ratings'
+    )
+    recipe = models.ForeignKey(
+        Recipe,
+        on_delete=models.CASCADE,
+        related_name='ratings'
+    )
+    rating = models.PositiveIntegerField(
+        validators=[MinValueValidator(1), MaxValueValidator(5)],
+        help_text="Rating from 1 to 5"
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
 
-    def get_serializer_context(self):
-        return {'request': self.request}
+    class Meta:
+        unique_together = ('user', 'recipe')
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f"{self.user.username} rated {self.recipe.title}: {self.rating}/5"
 
 
-class AdminRecipeDetailView(generics.RetrieveUpdateDestroyAPIView):
-    queryset = Recipe.objects.all()
-    serializer_class = RecipeDetailSerializer
-    permission_classes = [permissions.IsAdminUser]
+class Comment(models.Model):
+    """
+    User comments on recipes.
+    """
+    user = models.ForeignKey(
+        User,
+        on_delete=models.CASCADE,
+        related_name='comments'
+    )
+    recipe = models.ForeignKey(
+        Recipe,
+        on_delete=models.CASCADE,
+        related_name='comments'
+    )
+    text = models.TextField()
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
 
-    def get_serializer_context(self):
-        return {'request': self.request}
+    class Meta:
+        ordering = ['-created_at']
+
+    def __str__(self):
+        preview = self.text[:50] + '...' if len(self.text) > 50 else self.text
+        return f"{self.user.username}: {preview}"
