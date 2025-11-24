@@ -32,7 +32,6 @@ class RegisterSerializer(serializers.ModelSerializer):
     password = serializers.CharField(
         write_only=True,
         required=True,
-        validators=[validate_password],
         style={'input_type': 'password'}
     )
     password_confirm = serializers.CharField(
@@ -172,11 +171,12 @@ class RecipeListSerializer(serializers.ModelSerializer):
     total_ratings = serializers.SerializerMethodField()
     is_favorited = serializers.SerializerMethodField()
     total_time = serializers.SerializerMethodField()
+    image_url = serializers.SerializerMethodField()
 
     class Meta:
         model = Recipe
         fields = [
-            'id', 'title', 'description', 'image',
+            'id', 'title', 'description', 'image_url',
             'author', 'author_id', 'category', 'category_name',
             'prep_time', 'cook_time', 'total_time', 'servings',
             'average_rating', 'total_ratings', 'is_favorited',
@@ -192,6 +192,9 @@ class RecipeListSerializer(serializers.ModelSerializer):
     def get_total_time(self, obj):
         return obj.total_time()
 
+    def get_image_url(self, obj):
+        return obj.get_image_url()
+
     def get_is_favorited(self, obj):
         request = self.context.get('request')
         if request and request.user.is_authenticated:
@@ -204,24 +207,25 @@ class RecipeDetailSerializer(serializers.ModelSerializer):
     author = serializers.ReadOnlyField(source='author.username')
     author_id = serializers.ReadOnlyField(source='author.id')
     category_name = serializers.ReadOnlyField(source='category.name')
-    ingredients = IngredientSerializer(source='ingredient_items', many=True, read_only=True)
-    ratings = RatingSerializer(many=True, read_only=True)
+    ingredients_list = IngredientSerializer(source='ingredient_items', many=True, read_only=True)
     comments = CommentSerializer(many=True, read_only=True)
     average_rating = serializers.SerializerMethodField()
     total_ratings = serializers.SerializerMethodField()
     is_favorited = serializers.SerializerMethodField()
+    is_author = serializers.SerializerMethodField()
     user_rating = serializers.SerializerMethodField()
     total_time = serializers.SerializerMethodField()
+    image_url = serializers.SerializerMethodField()
 
     class Meta:
         model = Recipe
         fields = [
-            'id', 'title', 'description', 'instructions', 'image',
+            'id', 'title', 'description', 'instructions', 'image_url',
+            'ingredients', 'ingredients_list',
             'author', 'author_id', 'category', 'category_name',
             'prep_time', 'cook_time', 'total_time', 'servings',
-            'ingredients', 'ratings', 'comments',
-            'average_rating', 'total_ratings', 'user_rating',
-            'is_favorited', 'is_published',
+            'comments', 'average_rating', 'total_ratings', 'user_rating',
+            'is_favorited', 'is_author', 'is_published',
             'created_at', 'updated_at'
         ]
         read_only_fields = ['id', 'author', 'author_id', 'created_at', 'updated_at']
@@ -235,10 +239,19 @@ class RecipeDetailSerializer(serializers.ModelSerializer):
     def get_total_time(self, obj):
         return obj.total_time()
 
+    def get_image_url(self, obj):
+        return obj.get_image_url()
+
     def get_is_favorited(self, obj):
         request = self.context.get('request')
         if request and request.user.is_authenticated:
             return obj.favorited_by.filter(user=request.user).exists()
+        return False
+
+    def get_is_author(self, obj):
+        request = self.context.get('request')
+        if request and request.user.is_authenticated:
+            return obj.author == request.user
         return False
 
     def get_user_rating(self, obj):
@@ -252,19 +265,20 @@ class RecipeDetailSerializer(serializers.ModelSerializer):
 
 class RecipeCreateUpdateSerializer(serializers.ModelSerializer):
     """Serializer for creating and updating recipes."""
-    ingredients = IngredientSerializer(many=True, required=False)
+    ingredients_list = IngredientSerializer(source='ingredient_items', many=True, required=False)
 
     class Meta:
         model = Recipe
         fields = [
-            'id', 'title', 'description', 'instructions', 'image',
+            'id', 'title', 'description', 'instructions', 'image_url',
+            'ingredients', 'ingredients_list',
             'category', 'prep_time', 'cook_time', 'servings',
-            'ingredients', 'is_published'
+            'is_published'
         ]
         read_only_fields = ['id']
 
     def create(self, validated_data):
-        ingredients_data = validated_data.pop('ingredients', [])
+        ingredients_data = validated_data.pop('ingredient_items', [])
         recipe = Recipe.objects.create(**validated_data)
 
         for ingredient_data in ingredients_data:
@@ -273,7 +287,7 @@ class RecipeCreateUpdateSerializer(serializers.ModelSerializer):
         return recipe
 
     def update(self, instance, validated_data):
-        ingredients_data = validated_data.pop('ingredients', None)
+        ingredients_data = validated_data.pop('ingredient_items', None)
 
         # Update recipe fields
         for attr, value in validated_data.items():
