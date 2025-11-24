@@ -1,13 +1,17 @@
+"""
+Recipe App Models
 
+Database models for the Recipe application.
+"""
 from django.db import models
 from django.contrib.auth.models import User
 from django.core.validators import MinValueValidator, MaxValueValidator
 
 
 class Category(models.Model):
-
+    """Recipe category for organization."""
     name = models.CharField(max_length=100, unique=True)
-    description = models.TextField(blank=True, null=True)
+    description = models.TextField(blank=True, default='')
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
@@ -19,12 +23,14 @@ class Category(models.Model):
 
 
 class Recipe(models.Model):
-    """
-    Main recipe model containing all recipe information.
-    """
+    """Main recipe model containing all recipe information."""
     title = models.CharField(max_length=255)
     description = models.TextField(help_text="Brief description of the recipe")
-    instructions = models.TextField(help_text="Step-by-step cooking instructions")
+    instructions = models.TextField(
+        help_text="Step-by-step cooking instructions",
+        blank=True,
+        default=''
+    )
     prep_time = models.PositiveIntegerField(
         help_text="Preparation time in minutes",
         default=0
@@ -33,12 +39,18 @@ class Recipe(models.Model):
         help_text="Cooking time in minutes",
         default=0
     )
-    servings = models.PositiveIntegerField(default=1)
+    servings = models.PositiveIntegerField(default=4)
     image = models.ImageField(
         upload_to='recipes/',
         blank=True,
         null=True,
         help_text="Recipe image"
+    )
+    image_url = models.URLField(
+        max_length=500,
+        blank=True,
+        default='',
+        help_text="External image URL"
     )
 
     # Relationships
@@ -83,17 +95,17 @@ class Recipe(models.Model):
         """Return total cooking time (prep + cook)."""
         return self.prep_time + self.cook_time
 
-    @property
-    def is_favorited_by(self):
-        """Helper property for serializer context."""
-        return None  # Handled in serializer with request context
+    def get_image(self):
+        """Return image URL from either upload or external URL."""
+        if self.image:
+            return self.image.url
+        return self.image_url or None
 
 
 class Ingredient(models.Model):
-    """
-    Ingredient model linked to recipes.
-    """
+    """Ingredient model linked to recipes."""
     UNIT_CHOICES = [
+        ('', 'No unit'),
         ('g', 'Grams'),
         ('kg', 'Kilograms'),
         ('ml', 'Milliliters'),
@@ -111,15 +123,10 @@ class Ingredient(models.Model):
     recipe = models.ForeignKey(
         Recipe,
         on_delete=models.CASCADE,
-        related_name='ingredient_items'
+        related_name='ingredients_list'
     )
     name = models.CharField(max_length=200)
-    quantity = models.DecimalField(
-        max_digits=10,
-        decimal_places=2,
-        null=True,
-        blank=True
-    )
+    quantity = models.CharField(max_length=50, blank=True, default='')
     unit = models.CharField(
         max_length=20,
         choices=UNIT_CHOICES,
@@ -132,17 +139,17 @@ class Ingredient(models.Model):
         ordering = ['id']
 
     def __str__(self):
-        if self.quantity and self.unit:
-            return f"{self.quantity} {self.unit} {self.name}"
-        elif self.quantity:
-            return f"{self.quantity} {self.name}"
-        return self.name
+        parts = []
+        if self.quantity:
+            parts.append(str(self.quantity))
+        if self.unit:
+            parts.append(self.unit)
+        parts.append(self.name)
+        return ' '.join(parts)
 
 
 class Favorite(models.Model):
-    """
-    User's favorite recipes.
-    """
+    """User's favorite recipes."""
     user = models.ForeignKey(
         User,
         on_delete=models.CASCADE,
@@ -164,9 +171,7 @@ class Favorite(models.Model):
 
 
 class Rating(models.Model):
-    """
-    User ratings for recipes (1-5 stars).
-    """
+    """User ratings for recipes (1-5 stars)."""
     user = models.ForeignKey(
         User,
         on_delete=models.CASCADE,
@@ -193,9 +198,7 @@ class Rating(models.Model):
 
 
 class Comment(models.Model):
-    """
-    User comments on recipes.
-    """
+    """User comments on recipes."""
     user = models.ForeignKey(
         User,
         on_delete=models.CASCADE,

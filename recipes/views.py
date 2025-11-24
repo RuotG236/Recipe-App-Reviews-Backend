@@ -1,359 +1,359 @@
 """
-Recipe App Views
+Recipe App Serializers
 
-API views for handling all recipe-related operations.
+Serializers for converting model instances to JSON and vice versa.
 """
-from rest_framework import generics, viewsets, permissions, status, filters
-from rest_framework.decorators import action
-from rest_framework.response import Response
-from rest_framework.views import APIView
-from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
-from rest_framework_simplejwt.tokens import RefreshToken
+from rest_framework import serializers
 from django.contrib.auth.models import User
-from django.db.models import Q, Avg
-from django.shortcuts import get_object_or_404
-
+from django.contrib.auth.password_validation import validate_password
 from .models import Recipe, Category, Ingredient, Favorite, Rating, Comment
-from .serializers import (
-    UserSerializer, RegisterSerializer, UserUpdateSerializer, AdminUserSerializer,
-    RecipeListSerializer, RecipeDetailSerializer, RecipeCreateUpdateSerializer,
-    CategorySerializer, IngredientSerializer,
-    FavoriteSerializer, RatingSerializer, CommentSerializer
-)
-from .permissions import IsOwnerOrReadOnly, IsAdminOrReadOnly, IsAdminUser, IsOwnerOrAdmin
 
 
 # ============================================
-# Authentication Views
+# User Serializers
 # ============================================
 
-class RegisterView(generics.CreateAPIView):
-    """User registration endpoint."""
-    queryset = User.objects.all()
-    serializer_class = RegisterSerializer
-    permission_classes = [permissions.AllowAny]
+class UserSerializer(serializers.ModelSerializer):
+    """Serializer for User model (read-only representation)."""
+    recipes_count = serializers.SerializerMethodField()
 
-    def create(self, request, *args, **kwargs):
-        serializer = self.get_serializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
-        user = serializer.save()
+    class Meta:
+        model = User
+        fields = [
+            'id', 'username', 'email', 'first_name', 'last_name',
+            'is_staff', 'is_active', 'date_joined', 'recipes_count'
+        ]
+        read_only_fields = ['id', 'date_joined', 'recipes_count']
 
-        # Generate tokens for immediate login
-        refresh = RefreshToken.for_user(user)
-
-        return Response({
-            'message': 'Registration successful',
-            'user': UserSerializer(user).data,
-            'tokens': {
-                'refresh': str(refresh),
-                'access': str(refresh.access_token),
-            }
-        }, status=status.HTTP_201_CREATED)
+    def get_recipes_count(self, obj):
+        return obj.recipes.count()
 
 
-class LoginView(TokenObtainPairView):
-    """User login endpoint with enhanced response."""
-    permission_classes = [permissions.AllowAny]
+class RegisterSerializer(serializers.ModelSerializer):
+    """Serializer for user registration."""
+    password = serializers.CharField(
+        write_only=True,
+        required=True,
+        validators=[validate_password],
+        style={'input_type': 'password'}
+    )
+    password_confirm = serializers.CharField(
+        write_only=True,
+        required=True,
+        style={'input_type': 'password'}
+    )
+    email = serializers.EmailField(required=True)
 
-    def post(self, request, *args, **kwargs):
-        response = super().post(request, *args, **kwargs)
+    class Meta:
+        model = User
+        fields = [
+            'username', 'email', 'password', 'password_confirm',
+            'first_name', 'last_name'
+        ]
 
-        if response.status_code == 200:
-            # Add user info to response
-            user = User.objects.get(username=request.data['username'])
-            response.data['user'] = UserSerializer(user).data
-            response.data['message'] = 'Login successful'
+    def validate_username(self, value):
+        if User.objects.filter(username__iexact=value).exists():
+            raise serializers.ValidationError("Username already exists.")
+        if len(value) < 3:
+            raise serializers.ValidationError("Username must be at least 3 characters.")
+        return value
 
-        return response
+    def validate_email(self, value):
+        if User.objects.filter(email__iexact=value).exists():
+            raise serializers.ValidationError("Email already registered.")
+        return value
 
+    def validate(self, attrs):
+        if attrs['password'] != attrs['password_confirm']:
+            raise serializers.ValidationError({
+                "password_confirm": "Passwords do not match."
+            })
+        return attrs
 
-class LogoutView(APIView):
-    """User logout endpoint - blacklists the refresh token."""
-    permission_classes = [permissions.IsAuthenticated]
-
-    def post(self, request):
-        try:
-            refresh_token = request.data.get('refresh')
-            if refresh_token:
-                token = RefreshToken(refresh_token)
-                token.blacklist()
-            return Response(
-                {'message': 'Successfully logged out'},
-                status=status.HTTP_200_OK
-            )
-        except Exception as e:
-            return Response(
-                {'error': 'Invalid token'},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-
-
-class TokenRefreshViewCustom(TokenRefreshView):
-    """Custom token refresh view."""
-    permission_classes = [permissions.AllowAny]
-
-
-class ProfileView(generics.RetrieveUpdateAPIView):
-    """User profile view and update."""
-    permission_classes = [permissions.IsAuthenticated]
-
-    def get_serializer_class(self):
-        if self.request.method in ['PUT', 'PATCH']:
-            return UserUpdateSerializer
-        return UserSerializer
-
-    def get_object(self):
-        return self.request.user
-
-
-# ============================================
-# Recipe Views
-# ============================================
-
-class RecipeViewSet(viewsets.ModelViewSet):
-    """
-    ViewSet for Recipe CRUD operations.
-
-    Endpoints:
-    - GET /recipes/ - List all recipes
-    - POST /recipes/ - Create a new recipe
-    - GET /recipes/{id}/ - Get recipe details
-    - PUT/PATCH /recipes/{id}/ - Update a recipe
-    - DELETE /recipes/{id}/ - Delete a recipe
-    - POST /recipes/{id}/favorite/ - Add to favorites
-    - DELETE /recipes/{id}/unfavorite/ - Remove from favorites
-    - POST /recipes/{id}/rate/ - Rate a recipe
-    - POST /recipes/{id}/comment/ - Comment on a recipe
-    - GET /recipes/my_recipes/ - Get current user's recipes
-    """
-    permission_classes = [permissions.IsAuthenticatedOrReadOnly, IsOwnerOrReadOnly]
-    filter_backends = [filters.SearchFilter, filters.OrderingFilter]
-    search_fields = ['title', 'description', 'ingredient_items__name']
-    ordering_fields = ['created_at', 'title', 'prep_time', 'cook_time']
-    ordering = ['-created_at']
-
-    def get_queryset(self):
-        queryset = Recipe.objects.filter(is_published=True)
-
-        # Search by title or ingredient
-        search = self.request.query_params.get('search', None)
-        if search:
-            queryset = queryset.filter(
-                Q(title__icontains=search) |
-                Q(description__icontains=search) |
-                Q(ingredient_items__name__icontains=search)
-            ).distinct()
-
-        # Filter by category
-        category = self.request.query_params.get('category', None)
-        if category:
-            queryset = queryset.filter(category_id=category)
-
-        # Filter by author
-        author = self.request.query_params.get('author', None)
-        if author:
-            queryset = queryset.filter(author__username=author)
-
-        # Filter by minimum rating
-        min_rating = self.request.query_params.get('min_rating', None)
-        if min_rating:
-            queryset = queryset.annotate(
-                avg_rating=Avg('ratings__rating')
-            ).filter(avg_rating__gte=float(min_rating))
-
-        return queryset
-
-    def get_serializer_class(self):
-        if self.action == 'list':
-            return RecipeListSerializer
-        elif self.action in ['create', 'update', 'partial_update']:
-            return RecipeCreateUpdateSerializer
-        return RecipeDetailSerializer
-
-    def get_serializer_context(self):
-        return {'request': self.request}
-
-    def perform_create(self, serializer):
-        serializer.save(author=self.request.user)
-
-    @action(detail=True, methods=['post'], permission_classes=[permissions.IsAuthenticated])
-    def favorite(self, request, pk=None):
-        """Add recipe to user's favorites."""
-        recipe = self.get_object()
-        favorite, created = Favorite.objects.get_or_create(
-            user=request.user,
-            recipe=recipe
+    def create(self, validated_data):
+        validated_data.pop('password_confirm')
+        user = User.objects.create_user(
+            username=validated_data['username'],
+            email=validated_data['email'],
+            password=validated_data['password'],
+            first_name=validated_data.get('first_name', ''),
+            last_name=validated_data.get('last_name', '')
         )
+        return user
 
-        if created:
-            return Response(
-                {'message': 'Recipe added to favorites'},
-                status=status.HTTP_201_CREATED
-            )
-        return Response(
-            {'message': 'Recipe already in favorites'},
-            status=status.HTTP_200_OK
-        )
 
-    @action(detail=True, methods=['delete'], permission_classes=[permissions.IsAuthenticated])
-    def unfavorite(self, request, pk=None):
-        """Remove recipe from user's favorites."""
-        recipe = self.get_object()
-        favorite = Favorite.objects.filter(user=request.user, recipe=recipe).first()
+class UserUpdateSerializer(serializers.ModelSerializer):
+    """Serializer for updating user profile."""
 
-        if favorite:
-            favorite.delete()
-            return Response(
-                {'message': 'Recipe removed from favorites'},
-                status=status.HTTP_204_NO_CONTENT
-            )
-        return Response(
-            {'error': 'Recipe not in favorites'},
-            status=status.HTTP_404_NOT_FOUND
-        )
+    class Meta:
+        model = User
+        fields = ['first_name', 'last_name', 'email']
 
-    @action(detail=True, methods=['post'], permission_classes=[permissions.IsAuthenticated])
-    def rate(self, request, pk=None):
-        """Rate a recipe (1-5 stars)."""
-        recipe = self.get_object()
-        rating_value = request.data.get('rating')
+    def validate_email(self, value):
+        user = self.context['request'].user
+        if User.objects.exclude(pk=user.pk).filter(email__iexact=value).exists():
+            raise serializers.ValidationError("Email already in use.")
+        return value
 
-        try:
-            rating_value = int(rating_value)
-            if not (1 <= rating_value <= 5):
-                raise ValueError()
-        except (TypeError, ValueError):
-            return Response(
-                {'error': 'Rating must be an integer between 1 and 5'},
-                status=status.HTTP_400_BAD_REQUEST
-            )
 
-        rating, created = Rating.objects.update_or_create(
-            user=request.user,
-            recipe=recipe,
-            defaults={'rating': rating_value}
-        )
+class AdminUserSerializer(serializers.ModelSerializer):
+    """Serializer for admin user management."""
+    recipes_count = serializers.SerializerMethodField()
 
-        return Response(
-            {
-                'message': 'Rating saved' if created else 'Rating updated',
-                'rating': RatingSerializer(rating).data
-            },
-            status=status.HTTP_201_CREATED if created else status.HTTP_200_OK
-        )
+    class Meta:
+        model = User
+        fields = [
+            'id', 'username', 'email', 'first_name', 'last_name',
+            'is_staff', 'is_active', 'date_joined', 'last_login', 'recipes_count'
+        ]
+        read_only_fields = ['id', 'username', 'date_joined', 'last_login']
 
-    @action(detail=True, methods=['post'], permission_classes=[permissions.IsAuthenticated])
-    def comment(self, request, pk=None):
-        """Add a comment to a recipe."""
-        recipe = self.get_object()
-        text = request.data.get('text', '').strip()
-
-        if not text:
-            return Response(
-                {'error': 'Comment text is required'},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-
-        comment = Comment.objects.create(
-            user=request.user,
-            recipe=recipe,
-            text=text
-        )
-
-        return Response(
-            {
-                'message': 'Comment added',
-                'comment': CommentSerializer(comment).data
-            },
-            status=status.HTTP_201_CREATED
-        )
-
-    @action(detail=False, methods=['get'], permission_classes=[permissions.IsAuthenticated])
-    def my_recipes(self, request):
-        """Get all recipes created by the current user."""
-        recipes = Recipe.objects.filter(author=request.user).order_by('-created_at')
-        page = self.paginate_queryset(recipes)
-
-        if page is not None:
-            serializer = RecipeListSerializer(page, many=True, context={'request': request})
-            return self.get_paginated_response(serializer.data)
-
-        serializer = RecipeListSerializer(recipes, many=True, context={'request': request})
-        return Response(serializer.data)
+    def get_recipes_count(self, obj):
+        return obj.recipes.count()
 
 
 # ============================================
-# Category Views
+# Category Serializers
 # ============================================
 
-class CategoryViewSet(viewsets.ModelViewSet):
-    """ViewSet for Category CRUD operations."""
-    queryset = Category.objects.all()
-    serializer_class = CategorySerializer
-    permission_classes = [IsAdminOrReadOnly]
+class CategorySerializer(serializers.ModelSerializer):
+    """Serializer for Category model."""
+    recipes_count = serializers.SerializerMethodField()
 
+    class Meta:
+        model = Category
+        fields = ['id', 'name', 'description', 'recipes_count', 'created_at']
+        read_only_fields = ['id', 'created_at', 'recipes_count']
 
-# ============================================
-# Favorite Views
-# ============================================
-
-class FavoriteListView(generics.ListAPIView):
-    """List user's favorite recipes."""
-    serializer_class = FavoriteSerializer
-    permission_classes = [permissions.IsAuthenticated]
-
-    def get_queryset(self):
-        return Favorite.objects.filter(user=self.request.user)
+    def get_recipes_count(self, obj):
+        return obj.recipes.filter(is_published=True).count()
 
 
 # ============================================
-# Comment Views
+# Ingredient Serializers
 # ============================================
 
-class CommentUpdateDeleteView(generics.RetrieveUpdateDestroyAPIView):
-    """Update or delete a comment (owner only)."""
-    queryset = Comment.objects.all()
-    serializer_class = CommentSerializer
-    permission_classes = [permissions.IsAuthenticated, IsOwnerOrAdmin]
+class IngredientSerializer(serializers.ModelSerializer):
+    """Serializer for Ingredient model."""
+
+    class Meta:
+        model = Ingredient
+        fields = ['id', 'name', 'quantity', 'unit', 'notes']
+        read_only_fields = ['id']
 
 
 # ============================================
-# Admin Views
+# Rating Serializers
 # ============================================
 
-class AdminUserListView(generics.ListAPIView):
-    """Admin: List all users."""
-    queryset = User.objects.all().order_by('-date_joined')
-    serializer_class = AdminUserSerializer
-    permission_classes = [IsAdminUser]
-    filter_backends = [filters.SearchFilter]
-    search_fields = ['username', 'email', 'first_name', 'last_name']
+class RatingSerializer(serializers.ModelSerializer):
+    """Serializer for Rating model."""
+    user = serializers.ReadOnlyField(source='user.username')
+    user_id = serializers.ReadOnlyField(source='user.id')
+
+    class Meta:
+        model = Rating
+        fields = ['id', 'user', 'user_id', 'rating', 'created_at', 'updated_at']
+        read_only_fields = ['id', 'user', 'user_id', 'created_at', 'updated_at']
 
 
-class AdminUserDetailView(generics.RetrieveUpdateAPIView):
-    """Admin: View and update user details (e.g., deactivate)."""
-    queryset = User.objects.all()
-    serializer_class = AdminUserSerializer
-    permission_classes = [IsAdminUser]
+# ============================================
+# Comment Serializers
+# ============================================
+
+class CommentSerializer(serializers.ModelSerializer):
+    """Serializer for Comment model."""
+    user = serializers.ReadOnlyField(source='user.username')
+    user_id = serializers.ReadOnlyField(source='user.id')
+
+    class Meta:
+        model = Comment
+        fields = ['id', 'user', 'user_id', 'text', 'created_at', 'updated_at']
+        read_only_fields = ['id', 'user', 'user_id', 'created_at', 'updated_at']
 
 
-class AdminRecipeListView(generics.ListAPIView):
-    """Admin: List all recipes (including unpublished)."""
-    queryset = Recipe.objects.all().order_by('-created_at')
-    serializer_class = RecipeDetailSerializer
-    permission_classes = [IsAdminUser]
-    filter_backends = [filters.SearchFilter]
-    search_fields = ['title', 'author__username']
+# ============================================
+# Recipe Serializers
+# ============================================
 
-    def get_serializer_context(self):
-        return {'request': self.request}
+class RecipeListSerializer(serializers.ModelSerializer):
+    """Serializer for recipe list view (minimal data)."""
+    author = serializers.ReadOnlyField(source='author.username')
+    author_id = serializers.ReadOnlyField(source='author.id')
+    category_name = serializers.ReadOnlyField(source='category.name')
+    average_rating = serializers.SerializerMethodField()
+    total_ratings = serializers.SerializerMethodField()
+    is_favorited = serializers.SerializerMethodField()
+    total_time = serializers.SerializerMethodField()
+    image_url = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Recipe
+        fields = [
+            'id', 'title', 'description', 'image', 'image_url',
+            'author', 'author_id', 'category', 'category_name',
+            'prep_time', 'cook_time', 'total_time', 'servings',
+            'average_rating', 'total_ratings', 'is_favorited',
+            'created_at'
+        ]
+
+    def get_average_rating(self, obj):
+        return round(obj.average_rating(), 1)
+
+    def get_total_ratings(self, obj):
+        return obj.total_ratings()
+
+    def get_total_time(self, obj):
+        return obj.total_time()
+
+    def get_image_url(self, obj):
+        return obj.get_image()
+
+    def get_is_favorited(self, obj):
+        request = self.context.get('request')
+        if request and request.user.is_authenticated:
+            return obj.favorited_by.filter(user=request.user).exists()
+        return False
 
 
-class AdminRecipeDetailView(generics.RetrieveUpdateDestroyAPIView):
-    """Admin: View, update, or delete any recipe."""
-    queryset = Recipe.objects.all()
-    serializer_class = RecipeDetailSerializer
-    permission_classes = [IsAdminUser]
+class RecipeDetailSerializer(serializers.ModelSerializer):
+    """Serializer for recipe detail view (full data)."""
+    author = serializers.ReadOnlyField(source='author.username')
+    author_id = serializers.ReadOnlyField(source='author.id')
+    category_name = serializers.ReadOnlyField(source='category.name')
+    ingredients_list = IngredientSerializer(many=True, read_only=True)
+    ratings = RatingSerializer(many=True, read_only=True)
+    comments = CommentSerializer(many=True, read_only=True)
+    average_rating = serializers.SerializerMethodField()
+    total_ratings = serializers.SerializerMethodField()
+    is_favorited = serializers.SerializerMethodField()
+    user_rating = serializers.SerializerMethodField()
+    total_time = serializers.SerializerMethodField()
+    is_author = serializers.SerializerMethodField()
+    image_url = serializers.SerializerMethodField()
 
-    def get_serializer_context(self):
-        return {'request': self.request}
+    class Meta:
+        model = Recipe
+        fields = [
+            'id', 'title', 'description', 'instructions', 'image', 'image_url',
+            'author', 'author_id', 'category', 'category_name',
+            'prep_time', 'cook_time', 'total_time', 'servings',
+            'ingredients_list', 'ratings', 'comments',
+            'average_rating', 'total_ratings', 'user_rating',
+            'is_favorited', 'is_published', 'is_author',
+            'created_at', 'updated_at'
+        ]
+        read_only_fields = ['id', 'author', 'author_id', 'created_at', 'updated_at']
+
+    def get_average_rating(self, obj):
+        return round(obj.average_rating(), 1)
+
+    def get_total_ratings(self, obj):
+        return obj.total_ratings()
+
+    def get_total_time(self, obj):
+        return obj.total_time()
+
+    def get_image_url(self, obj):
+        return obj.get_image()
+
+    def get_is_favorited(self, obj):
+        request = self.context.get('request')
+        if request and request.user.is_authenticated:
+            return obj.favorited_by.filter(user=request.user).exists()
+        return False
+
+    def get_user_rating(self, obj):
+        request = self.context.get('request')
+        if request and request.user.is_authenticated:
+            rating = obj.ratings.filter(user=request.user).first()
+            if rating:
+                return rating.rating
+        return None
+
+    def get_is_author(self, obj):
+        request = self.context.get('request')
+        if request and request.user.is_authenticated:
+            return obj.author == request.user
+        return False
+
+
+class RecipeCreateUpdateSerializer(serializers.ModelSerializer):
+    """Serializer for creating and updating recipes."""
+    ingredients = serializers.ListField(
+        child=serializers.DictField(),
+        required=False,
+        write_only=True
+    )
+    # Accept ingredients as text (one per line) for simpler form submission
+    ingredients_text = serializers.CharField(
+        required=False,
+        write_only=True,
+        allow_blank=True
+    )
+
+    class Meta:
+        model = Recipe
+        fields = [
+            'id', 'title', 'description', 'instructions', 'image', 'image_url',
+            'category', 'prep_time', 'cook_time', 'servings',
+            'ingredients', 'ingredients_text', 'is_published'
+        ]
+        read_only_fields = ['id']
+
+    def create(self, validated_data):
+        ingredients_data = validated_data.pop('ingredients', [])
+        ingredients_text = validated_data.pop('ingredients_text', '')
+
+        recipe = Recipe.objects.create(**validated_data)
+
+        # Handle structured ingredients
+        for ingredient_data in ingredients_data:
+            Ingredient.objects.create(recipe=recipe, **ingredient_data)
+
+        # Handle text-based ingredients (one per line)
+        if ingredients_text:
+            for line in ingredients_text.strip().split('\n'):
+                line = line.strip()
+                if line:
+                    Ingredient.objects.create(recipe=recipe, name=line)
+
+        return recipe
+
+    def update(self, instance, validated_data):
+        ingredients_data = validated_data.pop('ingredients', None)
+        ingredients_text = validated_data.pop('ingredients_text', None)
+
+        # Update recipe fields
+        for attr, value in validated_data.items():
+            setattr(instance, attr, value)
+        instance.save()
+
+        # Update ingredients if provided
+        if ingredients_data is not None:
+            instance.ingredients_list.all().delete()
+            for ingredient_data in ingredients_data:
+                Ingredient.objects.create(recipe=instance, **ingredient_data)
+
+        if ingredients_text is not None:
+            instance.ingredients_list.all().delete()
+            for line in ingredients_text.strip().split('\n'):
+                line = line.strip()
+                if line:
+                    Ingredient.objects.create(recipe=instance, name=line)
+
+        return instance
+
+
+# ============================================
+# Favorite Serializers
+# ============================================
+
+class FavoriteSerializer(serializers.ModelSerializer):
+    """Serializer for Favorite model."""
+    recipe = RecipeListSerializer(read_only=True)
+
+    class Meta:
+        model = Favorite
+        fields = ['id', 'recipe', 'created_at']
+        read_only_fields = ['id', 'created_at']
