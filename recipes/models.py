@@ -95,6 +95,7 @@ class Rating(models.Model):
     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='ratings')
     recipe = models.ForeignKey(Recipe, on_delete=models.CASCADE, related_name='ratings')
     rating = models.IntegerField(choices=[(i, i) for i in range(1, 6)])
+    comment = models.TextField(blank=True, null=True, help_text="Optional comment with the rating")  # NEW FIELD
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
