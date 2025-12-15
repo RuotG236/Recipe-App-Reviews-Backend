@@ -1,7 +1,6 @@
 """
 Recipe App Serializers
 
-Serializers for converting model instances to JSON and vice versa.
 """
 from rest_framework import serializers
 from django.contrib.auth.models import User
@@ -49,11 +48,20 @@ class RegisterSerializer(serializers.ModelSerializer):
     def validate_username(self, value):
         if User.objects.filter(username__iexact=value).exists():
             raise serializers.ValidationError("Username already exists.")
+        if len(value) < 3:
+            raise serializers.ValidationError("Username must be at least 3 characters.")
+        if len(value) > 30:
+            raise serializers.ValidationError("Username cannot exceed 30 characters.")
         return value
 
     def validate_email(self, value):
         if User.objects.filter(email__iexact=value).exists():
             raise serializers.ValidationError("Email already registered.")
+        return value
+
+    def validate_password(self, value):
+        if len(value) < 6:
+            raise serializers.ValidationError("Password must be at least 6 characters.")
         return value
 
     def validate(self, attrs):
@@ -130,17 +138,23 @@ class IngredientSerializer(serializers.ModelSerializer):
 
 
 # ============================================
-# Rating Serializers
+# Rating Serializers - UPDATED WITH COMMENT
 # ============================================
 
 class RatingSerializer(serializers.ModelSerializer):
     """Serializer for Rating model."""
     user = serializers.ReadOnlyField(source='user.username')
+    user_id = serializers.ReadOnlyField(source='user.id')
 
     class Meta:
         model = Rating
-        fields = ['id', 'user', 'rating', 'created_at', 'updated_at']
-        read_only_fields = ['id', 'user', 'created_at', 'updated_at']
+        fields = ['id', 'user', 'user_id', 'rating', 'comment', 'created_at', 'updated_at']
+        read_only_fields = ['id', 'user', 'user_id', 'created_at', 'updated_at']
+
+    def validate_rating(self, value):
+        if value < 1 or value > 5:
+            raise serializers.ValidationError("Rating must be between 1 and 5")
+        return value
 
 
 # ============================================
@@ -163,24 +177,18 @@ class CommentSerializer(serializers.ModelSerializer):
 # ============================================
 
 class RecipeListSerializer(serializers.ModelSerializer):
-    """Serializer for recipe list view (minimal data)."""
+    """Serializer for Recipe list view."""
     author = serializers.ReadOnlyField(source='author.username')
-    author_id = serializers.ReadOnlyField(source='author.id')
     category_name = serializers.ReadOnlyField(source='category.name')
     average_rating = serializers.SerializerMethodField()
     total_ratings = serializers.SerializerMethodField()
-    is_favorited = serializers.SerializerMethodField()
-    total_time = serializers.SerializerMethodField()
-    image_url = serializers.SerializerMethodField()
 
     class Meta:
         model = Recipe
         fields = [
-            'id', 'title', 'description', 'image_url',
-            'author', 'author_id', 'category', 'category_name',
-            'prep_time', 'cook_time', 'total_time', 'servings',
-            'average_rating', 'total_ratings', 'is_favorited',
-            'created_at'
+            'id', 'title', 'description', 'image_url', 'author',
+            'category', 'category_name', 'prep_time', 'cook_time', 'servings',
+            'average_rating', 'total_ratings', 'created_at'
         ]
 
     def get_average_rating(self, obj):
@@ -189,43 +197,28 @@ class RecipeListSerializer(serializers.ModelSerializer):
     def get_total_ratings(self, obj):
         return obj.total_ratings()
 
-    def get_total_time(self, obj):
-        return obj.total_time()
-
-    def get_image_url(self, obj):
-        return obj.get_image_url()
-
-    def get_is_favorited(self, obj):
-        request = self.context.get('request')
-        if request and request.user.is_authenticated:
-            return obj.favorited_by.filter(user=request.user).exists()
-        return False
-
 
 class RecipeDetailSerializer(serializers.ModelSerializer):
-    """Serializer for recipe detail view (full data)."""
+    """Detailed serializer for Recipe model."""
     author = serializers.ReadOnlyField(source='author.username')
     author_id = serializers.ReadOnlyField(source='author.id')
     category_name = serializers.ReadOnlyField(source='category.name')
     ingredients_list = IngredientSerializer(source='ingredient_items', many=True, read_only=True)
     comments = CommentSerializer(many=True, read_only=True)
+    ratings = RatingSerializer(many=True, read_only=True)  # Include ratings with comments
     average_rating = serializers.SerializerMethodField()
     total_ratings = serializers.SerializerMethodField()
     is_favorited = serializers.SerializerMethodField()
-    is_author = serializers.SerializerMethodField()
     user_rating = serializers.SerializerMethodField()
-    total_time = serializers.SerializerMethodField()
-    image_url = serializers.SerializerMethodField()
 
     class Meta:
         model = Recipe
         fields = [
-            'id', 'title', 'description', 'instructions', 'image_url',
-            'ingredients', 'ingredients_list',
-            'author', 'author_id', 'category', 'category_name',
-            'prep_time', 'cook_time', 'total_time', 'servings',
-            'comments', 'average_rating', 'total_ratings', 'user_rating',
-            'is_favorited', 'is_author', 'is_published',
+            'id', 'title', 'description', 'instructions', 'ingredients',
+            'ingredients_list', 'image_url', 'author', 'author_id',
+            'category', 'category_name', 'prep_time', 'cook_time', 'servings',
+            'is_published', 'average_rating', 'total_ratings', 'is_favorited',
+            'user_rating', 'comments', 'ratings',
             'created_at', 'updated_at'
         ]
         read_only_fields = ['id', 'author', 'author_id', 'created_at', 'updated_at']
@@ -236,30 +229,20 @@ class RecipeDetailSerializer(serializers.ModelSerializer):
     def get_total_ratings(self, obj):
         return obj.total_ratings()
 
-    def get_total_time(self, obj):
-        return obj.total_time()
-
-    def get_image_url(self, obj):
-        return obj.get_image_url()
-
     def get_is_favorited(self, obj):
         request = self.context.get('request')
         if request and request.user.is_authenticated:
-            return obj.favorited_by.filter(user=request.user).exists()
-        return False
-
-    def get_is_author(self, obj):
-        request = self.context.get('request')
-        if request and request.user.is_authenticated:
-            return obj.author == request.user
+            return Favorite.objects.filter(user=request.user, recipe=obj).exists()
         return False
 
     def get_user_rating(self, obj):
         request = self.context.get('request')
         if request and request.user.is_authenticated:
-            rating = obj.ratings.filter(user=request.user).first()
-            if rating:
+            try:
+                rating = Rating.objects.get(user=request.user, recipe=obj)
                 return rating.rating
+            except Rating.DoesNotExist:
+                return None
         return None
 
 
@@ -276,6 +259,16 @@ class RecipeCreateUpdateSerializer(serializers.ModelSerializer):
             'is_published'
         ]
         read_only_fields = ['id']
+
+    def validate_title(self, value):
+        if len(value) < 3:
+            raise serializers.ValidationError("Title must be at least 3 characters.")
+        return value
+
+    def validate_description(self, value):
+        if len(value) < 10:
+            raise serializers.ValidationError("Description must be at least 10 characters.")
+        return value
 
     def create(self, validated_data):
         ingredients_data = validated_data.pop('ingredient_items', [])
